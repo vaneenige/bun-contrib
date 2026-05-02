@@ -197,10 +197,11 @@ test("worker with preload that registers message listener still delivers to main
   using dir = tempDir("issue-21101-preload", {
     "main.js": `
       import { Worker } from "node:worker_threads";
+      import { fileURLToPath } from "node:url";
 
       const worker = new Worker(new URL("./worker.js", import.meta.url), {
         type: "module",
-        preload: [new URL("./preload.js", import.meta.url).pathname],
+        preload: [fileURLToPath(new URL("./preload.js", import.meta.url))],
       });
 
       // Post BEFORE worker is online so the message is buffered and
