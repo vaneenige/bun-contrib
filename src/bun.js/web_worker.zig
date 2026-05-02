@@ -636,6 +636,15 @@ fn spin(this: *WebWorker) void {
     // inbox drain will reach live handlers. If the module's TLA never
     // settles AND it never registers a listener, this loop blocks in
     // autoTick() the same way waitForPromiseWithTermination would.
+    //
+    // Drain microtasks once unconditionally first: hasMessageListener
+    // is satisfied by ANY listener on the global event scope, and
+    // loadPreloads inside reloadEntryPoint already ran any preload
+    // bodies to completion. A preload that registers a 'message'
+    // listener would otherwise short-circuit the loop before the main
+    // module body runs, and buffered messages would dispatch to the
+    // preload's listener instead of the main module's.
+    vm.eventLoop().tick();
     while (!this.hasRequestedTerminate() and
         initial_promise.status() == .pending and
         !WebWorker__hasMessageListener(vm.global))

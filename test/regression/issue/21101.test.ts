@@ -184,3 +184,71 @@ test("worker receives messages posted synchronously before startup", async () =>
   expect(stderr).not.toContain("timeout");
   expect(exitCode).toBe(0);
 }, 15000);
+
+test("worker with preload that registers message listener still delivers to main module", async () => {
+  // Regression guard for the pre-online loop: hasMessageListener is
+  // satisfied by ANY listener on globalEventScope, including one
+  // registered by a preload module that runs synchronously inside
+  // reloadEntryPoint. If the loop short-circuits on the preload's
+  // listener before the main module body runs, fireEarlyMessages
+  // would dispatch buffered messages to the preload's listener only
+  // and the main module's parentPort.on('message', ...) would never
+  // see them.
+  using dir = tempDir("issue-21101-preload", {
+    "main.js": `
+      import { Worker } from "node:worker_threads";
+
+      const worker = new Worker(new URL("./worker.js", import.meta.url), {
+        type: "module",
+        preload: [new URL("./preload.js", import.meta.url).pathname],
+      });
+
+      // Post BEFORE worker is online so the message is buffered and
+      // drained by fireEarlyMessages on the worker thread.
+      worker.postMessage("hello");
+
+      let watchdog = setTimeout(() => {
+        console.error("timeout");
+        process.exit(1);
+      }, 5000);
+
+      worker.on("message", async (msg) => {
+        if (msg === "main-got") {
+          clearTimeout(watchdog);
+          await worker.terminate();
+        }
+      });
+    `,
+    "preload.js": `
+      // Preload registers a listener that should NOT be the one that
+      // receives the buffered message.
+      self.addEventListener("message", () => {
+        // If this fires, the buffered message went to the preload
+        // instead of the main module's listener.
+        self.postMessage("preload-got");
+      });
+    `,
+    "worker.js": `
+      import { parentPort } from "node:worker_threads";
+
+      parentPort.on("message", (msg) => {
+        if (msg === "hello") {
+          parentPort.postMessage("main-got");
+        }
+      });
+    `,
+  });
+
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), "main.js"],
+    env: bunEnv,
+    cwd: String(dir),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([proc.stdout.text(), proc.stderr.text(), proc.exited]);
+
+  expect(stderr).not.toContain("timeout");
+  expect(exitCode).toBe(0);
+}, 15000);
